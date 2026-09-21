@@ -104,8 +104,11 @@ td.ch{font-size:18px;font-family:ui-monospace,Consolas,monospace;width:48px;text
 .blk .tools button.del:hover{border-color:var(--danger);color:var(--danger)}
 .blk-img{display:flex;flex-direction:column;align-items:center;gap:8px;padding:6px}
 .blk-img img{max-width:100%;max-height:320px;background:#fff;border:1px solid var(--border)}
-.blk-img .ctl{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px}
+.blk-img .ctl{font-size:13px;color:var(--muted);display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px}
+.blk>*{min-width:0}
 .blk.title textarea{font-size:19px;font-weight:700;text-align:center}
+.blk.caption{margin-top:-4px;border-top-left-radius:0;border-top-right-radius:0;border-color:var(--accent)}
+.blk.caption textarea{text-align:center;font-size:13.5px;color:var(--muted)}
 .sticky{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0}
 footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:30px}
 </style>
@@ -389,7 +392,11 @@ async function pageLines(page) {
     }
     if (it.hasEOL) cur = null;
   }
-  lines.forEach(l => l.text = l.text.replace(/\s+/g, ' ').trim());
+  lines.forEach(l => {
+    l.text = l.text.replace(/\s+/g, ' ').trim();
+    // 페이지 대비 비율 좌표 (그림-설명 짝짓기에 사용)
+    l.fx0 = l.x0 / vp.width; l.fx1 = l.xEnd / vp.width; l.fy1 = l.y / vp.height;
+  });
   return lines.filter(l => l.text);
 }
 
@@ -409,14 +416,15 @@ function linesToParas(lines) {
       else if (l.x0 - prev.x0 > medH * 0.9 && l.x0 - prev.x0 < medH * 6) brk = true; // 첫 줄 들여쓰기
       else if (prev.xEnd < cur.maxRight - medH * 3 && /[.!?:。다요)\]]$/.test(prev.text)) brk = true; // 짧게 끝난 줄
     }
-    if (brk) { cur = {text: l.text, top: l.top, maxRight: l.xEnd}; paras.push(cur); }
+    if (brk) { cur = {text: l.text, top: l.top, maxRight: l.xEnd, left: l.fx0, right: l.fx1, bottom: l.fy1}; paras.push(cur); }
     else {
       cur.text = (/[A-Za-z]-$/.test(cur.text) && /^[a-z]/.test(l.text)) ? cur.text.slice(0, -1) + l.text : cur.text + ' ' + l.text;
       cur.maxRight = Math.max(cur.maxRight, l.xEnd);
+      cur.left = Math.min(cur.left, l.fx0); cur.right = Math.max(cur.right, l.fx1); cur.bottom = Math.max(cur.bottom, l.fy1);
     }
     prev = l;
   }
-  return paras.map(p => ({text: p.text, top: p.top}));
+  return paras.map(p => ({text: p.text, top: p.top, left: p.left, right: p.right, bottom: p.bottom}));
 }
 
 async function extractPdfText(pdf, onProg) {
@@ -583,7 +591,7 @@ async function extractPdfImages(pdf, opts, onProg) {
       const blob = await toJpeg(canvas, opts.quality);
       idx++;
       results.push({page: p, idx, blob, url: URL.createObjectURL(blob), width: canvas.width, height: canvas.height,
-                    top: ry / vp.height, left: rx / vp.width, source});
+                    top: ry / vp.height, left: rx / vp.width, bottom: (ry + rh) / vp.height, right: (rx + rw) / vp.width, source});
       await tick();
     }
     page.cleanup();
@@ -877,9 +885,9 @@ const HWPX = (() => {
     const border = t => `<hh:${t} type="NONE" width="0.1 mm" color="#000000"/>`;
     const bf = (id, fill) => `<hh:borderFill id="${id}" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0"><hh:slash type="NONE" Crooked="0" isCounter="0"/><hh:backSlash type="NONE" Crooked="0" isCounter="0"/>${border('leftBorder')}${border('rightBorder')}${border('topBorder')}${border('bottomBorder')}<hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/>${fill ? '<hc:fillBrush><hc:winBrush faceColor="none" hatchColor="#999999" alpha="0"/></hc:fillBrush>' : ''}</hh:borderFill>`;
     const charPr = (id, height, color, fontId, bold) => `<hh:charPr id="${id}" height="${height}" textColor="${color}" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="2"><hh:fontRef ${all(fontId)}/><hh:ratio ${all(100)}/><hh:spacing ${all(0)}/><hh:relSz ${all(100)}/><hh:offset ${all(0)}/>${bold ? '<hh:bold/>' : ''}<hh:underline type="NONE" shape="SOLID" color="#000000"/><hh:strikeout shape="NONE" color="#000000"/><hh:outline type="NONE"/><hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/></hh:charPr>`;
-    const paraPr = (id, align, ls, prev, next) => {
+    const paraPr = (id, align, ls, prev, next, keepNext = 0) => {
       const m = `<hh:margin><hc:intent value="0" unit="HWPUNIT"/><hc:left value="0" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="${prev}" unit="HWPUNIT"/><hc:next value="${next}" unit="HWPUNIT"/></hh:margin><hh:lineSpacing type="PERCENT" value="${ls}" unit="HWPUNIT"/>`;
-      return `<hh:paraPr id="${id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1" suppressLineNumbers="0" checked="0"><hh:align horizontal="${align}" vertical="BASELINE"/><hh:heading type="NONE" idRef="0" level="0"/><hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD" widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/><hh:autoSpacing eAsianEng="0" eAsianNum="0"/><hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">${m}</hp:case><hp:default>${m}</hp:default></hp:switch><hh:border borderFillIDRef="2" offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0"/></hh:paraPr>`;
+      return `<hh:paraPr id="${id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1" suppressLineNumbers="0" checked="0"><hh:align horizontal="${align}" vertical="BASELINE"/><hh:heading type="NONE" idRef="0" level="0"/><hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD" widowOrphan="0" keepWithNext="${keepNext}" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/><hh:autoSpacing eAsianEng="0" eAsianNum="0"/><hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">${m}</hp:case><hp:default>${m}</hp:default></hp:switch><hh:border borderFillIDRef="2" offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0"/></hh:paraPr>`;
     };
     const lv = [['DIGIT', '^1.'], ['HANGUL_SYLLABLE', '^2.'], ['DIGIT', '^3)'], ['HANGUL_SYLLABLE', '^4)'], ['DIGIT', '(^5)'], ['HANGUL_SYLLABLE', '(^6)'], ['CIRCLED_DIGIT', '^7']];
     const numbering = `<hh:numberings itemCnt="1"><hh:numbering id="1" start="0">${lv.map(([f, t], i) => `<hh:paraHead start="1" level="${i + 1}" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="${f}" charPrIDRef="4294967295" checkable="${i === 6 ? 1 : 0}">${t}</hh:paraHead>`).join('')}</hh:numbering></hh:numberings>`;
@@ -888,10 +896,10 @@ const HWPX = (() => {
       `<hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>` +
       `<hh:refList>${fontfaces}` +
       `<hh:borderFills itemCnt="2">${bf(1, false)}${bf(2, true)}</hh:borderFills>` +
-      `<hh:charProperties itemCnt="3">${charPr(0, body, '#000000', 1, false)}${charPr(1, Math.round(body * 1.7), '#000000', 0, true)}${charPr(2, Math.round(body * 0.85), '#808080', 0, false)}</hh:charProperties>` +
+      `<hh:charProperties itemCnt="4">${charPr(0, body, '#000000', 1, false)}${charPr(1, Math.round(body * 1.7), '#000000', 0, true)}${charPr(2, Math.round(body * 0.85), '#808080', 0, false)}${charPr(3, Math.round(body * 0.9), '#000000', 0, false)}</hh:charProperties>` +
       `<hh:tabProperties itemCnt="1"><hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/></hh:tabProperties>` +
       numbering +
-      `<hh:paraProperties itemCnt="3">${paraPr(0, 'JUSTIFY', lineSpacing, 0, 600)}${paraPr(1, 'CENTER', lineSpacing, 600, 600)}${paraPr(2, 'CENTER', 130, 1200, 600)}</hh:paraProperties>` +
+      `<hh:paraProperties itemCnt="5">${paraPr(0, 'JUSTIFY', lineSpacing, 0, 600)}${paraPr(1, 'CENTER', lineSpacing, 600, 600)}${paraPr(2, 'CENTER', 130, 1200, 600)}${paraPr(3, 'CENTER', lineSpacing, 600, 200, 1)}${paraPr(4, 'CENTER', 130, 0, 900)}</hh:paraProperties>` +
       `<hh:styles itemCnt="1"><hh:style id="0" type="PARA" name="바탕글" engName="Normal" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0" langID="1042" lockForm="0"/></hh:styles>` +
       `</hh:refList>` +
       `<hh:compatibleDocument targetProgram="HWP201X"><hh:layoutCompatibility/></hh:compatibleDocument>` +
@@ -936,7 +944,8 @@ const HWPX = (() => {
     zip.file('mimetype', 'application/hwp+zip', {compression: 'STORE'});
     const paras = [], manifestImgs = [], allText = [];
     let imgN = 0;
-    for (const b of blocks) {
+    for (let bi = 0; bi < blocks.length; bi++) {
+      const b = blocks[bi];
       if (b.type === 'image') {
         imgN++;
         const binId = 'image' + imgN;
@@ -946,10 +955,11 @@ const HWPX = (() => {
         let h = w * b.height / b.width;
         if (h > MAX_IMG_H) { w = w * MAX_IMG_H / h; h = MAX_IMG_H; }
         w = Math.max(200, Math.round(w)); h = Math.max(200, Math.round(h));
-        paras.push({ppr: 1, cpr: 0, pageBreak: b.pageBreak, inner: pic(imgN, binId, b.width, b.height, w, h) + '<hp:t/>'});
+        const capNext = blocks[bi + 1] && blocks[bi + 1].type === 'caption';
+        paras.push({ppr: capNext ? 3 : 1, cpr: 0, pageBreak: b.pageBreak, inner: pic(imgN, binId, b.width, b.height, w, h) + '<hp:t/>'});
       } else {
-        const ppr = b.type === 'title' ? 1 : b.type === 'label' ? 2 : 0;
-        const cpr = b.type === 'title' ? 1 : b.type === 'label' ? 2 : 0;
+        const ppr = b.type === 'title' ? 1 : b.type === 'label' ? 2 : b.type === 'caption' ? 4 : 0;
+        const cpr = b.type === 'title' ? 1 : b.type === 'label' ? 2 : b.type === 'caption' ? 3 : 0;
         const lines = String(b.text || '').replace(/\r/g, '').replace(/\t/g, ' ').split('\n');
         lines.forEach((ln, i) => {
           allText.push(ln);
@@ -988,15 +998,50 @@ let hw = null;       // {base, pages, imgs, blocks:[{id,type,text|img,page,scale
 let blkSeq = 0;
 const newBlock = o => Object.assign({id: ++blkSeq}, o);
 
+/* "Fig. 3." "Figure 2:" "그림 1." "사진 2" 같은 그림 설명 문단 */
+const CAPTION_RE = /^\s*(fig(ure)?\.?|그림|사진|도판|\[그림)\s*\d+/i;
+
+/* 같은 페이지에서 그림 설명(캡션)과 이미지를 위치로 짝지음.
+   설명이 이미지 바로 아래(또는 위)에 있고 가로로 겹칠수록 가까운 짝. 1:1로 배정 */
+function pairCaptions(paras, pimgs) {
+  const pairs = [];
+  paras.forEach((t, ti) => {
+    if (!CAPTION_RE.test(t.text) || t.left == null) return;
+    pimgs.forEach((m, mi) => {
+      const ov = Math.min(t.right, m.right) - Math.max(t.left, m.left);
+      if (ov < Math.min(t.right - t.left, m.right - m.left) * 0.3) return;   // 가로로 거의 안 겹침
+      const below = t.top - m.bottom, above = m.top - t.bottom;
+      let cost;
+      if (below > -0.02 && below < 0.12) cost = Math.max(0, below);            // 이미지 아래 설명 (일반적)
+      else if (above > -0.02 && above < 0.06) cost = Math.max(0, above) + 0.03; // 이미지 위 설명
+      else return;
+      pairs.push({ti, mi, cost});
+    });
+  });
+  pairs.sort((a, b) => a.cost - b.cost);
+  const capOf = new Map(), usedT = new Set();
+  for (const {ti, mi} of pairs) {
+    if (capOf.has(mi) || usedT.has(ti)) continue;
+    capOf.set(mi, ti); usedT.add(ti);
+  }
+  return capOf;   // 이미지 번호 → 문단 번호
+}
+
 function buildInitialBlocks(pages, imgs, title) {
   const blocks = [newBlock({type: 'title', text: title, page: 0})];
   pages.forEach((pg, i) => {
     const p = i + 1;
-    const items = pg.paras.map(t => newBlock({type: 'text', text: t.text, top: t.top, page: p}));
-    imgs.filter(m => m.page === p).sort((a, b) => a.top - b.top).forEach(m => {
+    // 위→아래 순, 같은 높이에서 시작하면(2단 편집) 왼쪽 단 먼저
+    const pimgs = imgs.filter(m => m.page === p).sort((a, b) => Math.abs(a.top - b.top) < 0.02 ? a.left - b.left : a.top - b.top);
+    const capOf = pairCaptions(pg.paras, pimgs);
+    const capParas = new Set(capOf.values());
+    const items = pg.paras.map((t, ti) => capParas.has(ti) ? null : newBlock({type: 'text', text: t.text, top: t.top, page: p})).filter(Boolean);
+    pimgs.forEach((m, mi) => {
       let k = items.findIndex(it => it.type === 'text' && it.top > m.top + 0.002);
       if (k < 0) k = items.length;
-      items.splice(k, 0, newBlock({type: 'image', img: m, page: p, scale: 100}));
+      const group = [newBlock({type: 'image', img: m, page: p, scale: 100})];
+      if (capOf.has(mi)) group.push(newBlock({type: 'caption', text: pg.paras[capOf.get(mi)].text, page: p}));   // 그림 바로 밑에 설명
+      items.splice(k, 0, ...group);
     });
     blocks.push(...items);
   });
@@ -1018,13 +1063,13 @@ function renderEditor() {
     if (b.type === 'image') {
       html += `<div class="blk" data-id="${b.id}"><div class="blk-img"><img src="${b.img.url}" alt="PDF ${b.page}쪽 이미지" style="width:${b.scale}%"><div class="ctl">폭 <input type="range" min="10" max="100" step="5" value="${b.scale}" data-scale> <span>${b.scale}%</span> · ${b.img.width}×${b.img.height}px</div></div>${tools}</div>`;
     } else {
-      html += `<div class="blk${b.type === 'title' ? ' title' : ''}" data-id="${b.id}"><textarea rows="1" placeholder="${b.type === 'title' ? '문서 제목 (비우면 생략)' : '문단 내용'}">${esc(b.text)}</textarea>${tools}</div>`;
+      html += `<div class="blk${b.type === 'title' ? ' title' : b.type === 'caption' ? ' caption' : ''}" data-id="${b.id}"><textarea rows="1" placeholder="${b.type === 'title' ? '문서 제목 (비우면 생략)' : b.type === 'caption' ? '그림 설명' : '문단 내용'}">${esc(b.text)}</textarea>${tools}</div>`;
     }
   }
   ed.innerHTML = html;
   ed.querySelectorAll('textarea').forEach(autoGrow);
-  const nImg = hw.blocks.filter(b => b.type === 'image').length;
-  $('#hw-blkcount').textContent = `문단 ${hw.blocks.length - nImg}개 · 이미지 ${nImg}개`;
+  const nImg = hw.blocks.filter(b => b.type === 'image').length, nCap = hw.blocks.filter(b => b.type === 'caption').length;
+  $('#hw-blkcount').textContent = `문단 ${hw.blocks.length - nImg - nCap}개 · 이미지 ${nImg}개 · 그림 설명 ${nCap}개`;
 }
 
 $('#hw-editor').addEventListener('input', e => {
@@ -1078,7 +1123,7 @@ function hwpxBlocksFromEditor() {
       lastPage = b.page;
     }
     if (b.type === 'image') out.push({type: 'image', blob: b.img.blob, width: b.img.width, height: b.img.height, scale: b.scale, pageBreak: brk});
-    else out.push({type: 'text', text: b.text, pageBreak: brk});
+    else out.push({type: b.type === 'caption' ? 'caption' : 'text', text: b.text, pageBreak: brk});
   }
   return out;
 }
